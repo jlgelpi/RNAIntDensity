@@ -4,17 +4,29 @@
 import json
 import argparse
 import re
+import numpy as np
 
 from Bio.PDB.MMCIFParser import MMCIFParser
 from Bio.PDB.Structure import Structure
 from Bio.PDB.Chain import Chain
 from Bio.PDB.Model import Model
+from Bio.PDB.Residue import Residue
+from Bio.PDB.Atom import Atom
 from Bio.PDB.Superimposer import Superimposer
 from Bio.PDB.PDBIO import PDBIO
 
 import biobb_structure_checking.modelling.utils as mu
 
 SUP_ATOMS = ['C4\'', 'O4\'', 'C1\'', 'C2\'', 'C3\'']
+HB_QUALITY_ALL = ['standard', 'acceptable', 'questionable']
+HB_QUALITY = ['standard', 'acceptable']
+NULL_TRANS = [
+    [[1.0, 0.0, 0.0],
+     [0.0,  1.0, 0.0],
+     [0.0, 0.0, 1.0]],
+    [0.0, 0.0, 0.0]
+]
+
 
 def get_atom_from_index(st, atom_index):
     ''' Get atom from structure by index '''
@@ -22,6 +34,7 @@ def get_atom_from_index(st, atom_index):
         if at.serial_number == atom_index:
             return at
     return None
+
 
 def get_atom_from_x3dna_id(st, atom_id):
     ''' Get atom from structure by ID '''
@@ -51,11 +64,12 @@ def atom_renumbering(st):
             atm.selected_child.serial_number = i
         i += 1
 
+
 def superimpose_models(st):
     ''' superimpose groups of models in a structure '''
-    rmsd = []
-    rmsd_all = []
-    rotran = []
+    rmsd = [0.]
+    rmsd_all = [0.]
+    rotran = [NULL_TRANS]
 
     fix_atoms = [
         at
@@ -82,41 +96,97 @@ def superimpose_models(st):
         rotran.append(spimp.rotran)
     return rotran, rmsd, rmsd_all
 
+
 def main(st, x3dna_data, args):
     ''' Main function to process the tructure and X3DNA data '''
+
+    hb_data = {}
+    for hb in x3dna_data['hbonds']:
+        at1 = get_atom_from_x3dna_id(st, hb['atom1_id'])
+        at2 = get_atom_from_x3dna_id(st, hb['atom2_id'])
+
+        res1 = at1.get_parent()
+        if res1 not in hb_data:
+            hb_data[res1] = []
+
+        hb_data[res1].append({
+            'atm': at1,
+            'coords': at2.coord,
+            'details': hb
+        })
+
+        res2 = at2.get_parent()
+        if res2 not in hb_data:
+            hb_data[res2] = []
+
+        hb_data[res2].append({
+            'atm': at2,
+            'coords': at1.coord,
+            'details': hb
+        })
+    # for res in hb_data:
+    #     for hb in hb_data[res]:
+    #         print(f"Atom {mu.atom_id(hb['atm'])} {hb['coords']} {hb['details']['distance']} {hb['details']['donAcc_type']} {hb['details']['residue_pair']}")
+
     groups = {}
     # Prep residue groups
     for res in st.get_residues():
+        if res not in hb_data:
+            continue
         if res.id[0] != ' ':
             continue
         if res.get_resname() not in groups:
             groups[res.get_resname()] = {
-                'residues': [],
                 'structure': Structure(res.get_resname()),
+                'residues': [],
                 'nmod': 0,
                 'rmsd_sup': None,
                 'rmsd_all': None,
-                'rotran': None
+                'rotran': None,
+                'transformed_hbcoords': []
             }
-        groups[res.get_resname()]['residues'].append(res)
+
         residue = res.copy()
         new_chain = Chain('A')
         new_chain.add(residue)
         new_mod = Model(groups[res.get_resname()]['nmod'])
         new_mod.add(new_chain)
         groups[res.get_resname()]['structure'].add(new_mod)
+
+        groups[res.get_resname()]['residues'].append({
+            'residue' :res,
+            'nmod': groups[res.get_resname()]['nmod'],
+            'hbcoords': [hb['coords'] for hb in hb_data[res]]
+        })
+
         groups[res.get_resname()]['nmod'] += 1
 
-    for gr in groups:
-        groups[gr]['rotran'], groups[gr]['rmsd_sup'], groups[gr]['rmsd_all'] = superimpose_models(groups[gr]['structure'])
-        max_rmsd_all = max(groups[gr]['rmsd_all'])
-        max_rmsd_sup = max(groups[gr]['rmsd_sup'])
+    for gr_id, gr in groups.items():
+        print(f"Processing group: {gr_id}, number of models: {len(gr['structure'])}")
+        gr['rotran'], gr['rmsd_sup'], gr['rmsd_all'] = superimpose_models(gr['structure'])
+        max_rmsd_all = max(gr['rmsd_all'])
+        max_rmsd_sup = max(gr['rmsd_sup'])
         print(
-            f"Group: {gr}, RMSd (all): {max_rmsd_all:.2f}, RMSd (sup): {max_rmsd_sup:.2f}"
-    )
+            f"Group: {gr_id}, RMSd (all): {max_rmsd_all:.2f}, RMSd (sup): {max_rmsd_sup:.2f}"
+        )
+        # transform hbcoords
+        nwat = 1
+        nmod = 0
+        for i, res_data in enumerate(gr['residues']):
+            rot, tran = gr['rotran'][i]
+            for hb in res_data['hbcoords']:
+                transformed_hbcoords = np.dot(hb, rot) + tran
+                gr['transformed_hbcoords'].append(transformed_hbcoords)
+                new_atom = Atom('O', transformed_hbcoords, 1.0, 1.0, ' ', 'O', 0, 'O')
+                new_residue = Residue(('W', nwat, ' '), 'WAT', ' ')
+                new_residue.add(new_atom)
+                gr['structure'][nmod]['A'].add(new_residue)
+                nwat += 1
+            nmod += 1
+        # Save the group structure to a PDB file
         io = PDBIO()
-        io.set_structure(groups[gr]['structure'])
-        io.save(f"{gr}.pdb")
+        io.set_structure(gr['structure'])
+        io.save(f"{gr_id}.pdb")
 
 
 
@@ -124,11 +194,6 @@ def main(st, x3dna_data, args):
 
 
 
-    # for hb in x3dna_data['hbonds']:
-    #     print(
-    #         hb['atom1_id'], mu.atom_id(get_atom_from_x3dna_id(st, hb['atom1_id'])),
-    #         hb['atom2_id'], mu.atom_id(get_atom_from_x3dna_id(st, hb['atom2_id']))
-    #     )
 
 
 if __name__ == '__main__':
