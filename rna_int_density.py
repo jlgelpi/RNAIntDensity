@@ -5,6 +5,7 @@ import json
 import argparse
 import re
 import numpy as np
+import os
 
 from Bio.PDB.MMCIFParser import MMCIFParser
 from Bio.PDB.Structure import Structure
@@ -17,10 +18,15 @@ from Bio.PDB.PDBIO import PDBIO
 
 import biobb_structure_checking.modelling.utils as mu
 
-SUP_ATOMS = ['C4\'', 'O4\'', 'C1\'', 'C2\'', 'C3\'']
+RIBOSE_RING_ATOMS = ['C4\'', 'O4\'', 'C1\'', 'C2\'', 'C3\'']
+
+SUP_ATOMS = RIBOSE_RING_ATOMS
+
 HB_QUALITY_ALL = ['standard', 'acceptable', 'questionable']
+
 HB_QUALITY = ['standard', 'acceptable']
-NULL_TRANS = [
+
+NULL_ROTRAN = [
     [[1.0, 0.0, 0.0],
      [0.0,  1.0, 0.0],
      [0.0, 0.0, 1.0]],
@@ -69,7 +75,7 @@ def superimpose_models(st):
     ''' superimpose groups of models in a structure '''
     rmsd = [0.]
     rmsd_all = [0.]
-    rotran = [NULL_TRANS]
+    rotran = [NULL_ROTRAN]
 
     fix_atoms = [
         at
@@ -124,9 +130,6 @@ def main(st, x3dna_data, args):
             'coords': at1.coord,
             'details': hb
         })
-    # for res in hb_data:
-    #     for hb in hb_data[res]:
-    #         print(f"Atom {mu.atom_id(hb['atm'])} {hb['coords']} {hb['details']['distance']} {hb['details']['donAcc_type']} {hb['details']['residue_pair']}")
 
     groups = {}
     # Prep residue groups
@@ -186,7 +189,7 @@ def main(st, x3dna_data, args):
         # Save the group structure to a PDB file
         io = PDBIO()
         io.set_structure(gr['structure'])
-        io.save(f"{gr_id}.pdb")
+        io.save(f"{args.output_folder}/{gr_id}.pdb")
 
 
 
@@ -198,10 +201,22 @@ def main(st, x3dna_data, args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Combine X3DNA analysis on a 3D grid')
+    parser.add_argument('-o','--output_folder', type=str, help='Output Folder (Default input folder)')
     parser.add_argument('cif_file', type=str, help='Input mmCIF file')
     parser.add_argument('json_file', type=str, help='Input JSON file with X3DNA analysis')
     args = parser.parse_args()
 
+    # Check if the input files exist
+    if not os.path.isfile(args.cif_file):
+        raise FileNotFoundError(f"Input mmCIF file not found: {args.cif_file}")
+    if not os.path.isfile(args.json_file):
+        raise FileNotFoundError(f"Input JSON file not found: {args.json_file}") 
+    if args.output_folder is None:
+        args.output_folder = os.path.dirname(args.cif_file)
+    # Ensure the output folder exists
+    if not os.path.exists(args.output_folder):
+        os.makedirs(args.output_folder)
+    
     # Parse the PDB file
     parser = MMCIFParser()
     structure = parser.get_structure('X3DNA', args.cif_file)
