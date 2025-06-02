@@ -34,9 +34,23 @@ NULL_ROTRAN = [
     [0.0, 0.0, 0.0]
 ]
 
-STD_RESNAMES = ['A', 'C', 'G', 'U', 'DT', 'DA', 'DC', 'DG']
+STD_RESNAMES = [
+    'A', 'C', 'G', 'U', 
+    'DT', 'DA', 'DC', 'DG', 
+    'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 
+    'GLY', 'GLN', 'GLU', 'HIS', 'ILE', 
+    'LEU', 'LYS', 'MET', 'PHE', 'PRO', 
+    'SER', 'THR', 'TRP', 'TYR', 'VAL'
+]
+
+STD_NUCLEOTIDES = [
+    'A', 'C', 'G', 'U',
+    'DA', 'DC', 'DG', 'DT'
+]
 
 NEW_CHAIN_ID = 'A'  # New chain ID for the output structure
+WAT_CHAIN_ID = 'W'  # Chain ID for water molecules in the output structure
+
 
 def get_atom_from_index(st, atom_index):
     ''' Get atom from structure by index '''
@@ -134,52 +148,88 @@ def process_hbonds_data(st, hbonds_data):
         })
     return hb_data
 
+class ResidueGroup():
+    ''' Class to hold a group of residues '''
+    def __init__(self, resname):
+        self.id = resname
+        self.structure = Structure(resname)
+        self.residues = []
+        self.nmod = 0
+        self.rmsd_sup = None
+        self.rmsd_all = None
+        self.rotran = None
+
+    def add_residue(self, res, hb_data):
+        ''' Add a residue to the group '''
+        residue = res.copy()
+        new_chain = Chain(NEW_CHAIN_ID)
+        new_chain.add(residue)
+        new_mod = Model(self.nmod)
+        new_mod.add(new_chain)
+        new_wat_chain = Chain(WAT_CHAIN_ID)
+        new_mod.add(new_wat_chain)
+        self.structure.add(new_mod)
+        self.residues.append({
+            'residue': res,
+            'nmod': self.nmod,
+            'hbcoords': [hb['coords'] for hb in hb_data]
+        })
+        self.nmod += 1
+
+    def superimpose(self):
+        ''' Superimpose the models in the group '''
+        self.rotran, self.rmsd_sup, self.rmsd_all = superimpose_models(self.structure)
+
+    def transform_hbcoords(self):
+        ''' Transform the hydrogen bond coordinates using groups's rotation and translation
+            and add them as fake water molecules in the structure
+        '''
+        nmod = 0
+        for i, res_data in enumerate(self.residues):
+            nwat = 1
+            for hb in res_data['hbcoords']:
+                new_atom = Atom(
+                    'O', 
+                    apply_transformation(hb, self.rotran[i]),
+                    1.0, 1.0, ' ', 'O', 0, 'O'
+                )
+                new_residue = Residue(('W', nwat, ' '), 'WAT', ' ')
+                new_residue.add(new_atom)
+                self.structure[nmod][WAT_CHAIN_ID].add(new_residue)
+                nwat += 1
+            nmod += 1
+
+    def save(self, output_file_name):
+        ''' Save the group structure to a PDB file '''
+        io = PDBIO()
+        io.set_structure(self.structure)
+        io.save(output_file_name)
 
 def prepare_groups(st, hb_data):
     ''' Prepare groups of residues to accumulate HB data '''
     groups = {}
     nresidues = 0
     for res in st.get_residues():
-        if res not in hb_data:
+        if res not in hb_data or not hb_data[res] or res.get_resname() not in STD_NUCLEOTIDES:
             continue
-        if res.id[0] != ' ':
-            continue
+
+        # Create a new group if it does not exist
         if res.get_resname() not in groups:
-            groups[res.get_resname()] = {
-                'structure': Structure(res.get_resname()),
-                'residues': [],
-                'nmod': 0,
-                'rmsd_sup': None,
-                'rmsd_all': None,
-                'rotran': None,
-                'transformed_hbcoords': []
-            }
+            groups[res.get_resname()] = ResidueGroup(res.get_resname())
 
-        residue = res.copy()
-        new_chain = Chain(NEW_CHAIN_ID)
-        new_chain.add(residue)
-        new_mod = Model(groups[res.get_resname()]['nmod'])
-        new_mod.add(new_chain)
-        groups[res.get_resname()]['structure'].add(new_mod)
+        # Add the residue to the group
+        groups[res.get_resname()].add_residue(res, hb_data[res])
 
-        groups[res.get_resname()]['residues'].append({
-            'residue' :res,
-            'nmod': groups[res.get_resname()]['nmod'],
-            'hbcoords': [hb['coords'] for hb in hb_data[res]]
-        })
-
-        groups[res.get_resname()]['nmod'] += 1
         nresidues += 1
 
     print(f"Found {len(hb_data)} hydrogen bonds on {nresidues} residues")
     return groups
 
-def save_group(gr, gr_id, st_id, output_folder):
-    ''' Save the group structure to a PDB file'''
-    io = PDBIO()
-    io.set_structure(gr['structure'])
-    io.save(f"{output_folder}/{st_id}_{gr_id}.pdb")
-
+def apply_transformation(crds, rotran):
+    ''' Apply the rotation and translation to the coordinates '''
+    rot, tran = rotran
+    transformed_crds = np.dot(crds, rot) + tran
+    return transformed_crds
 
 def process_structure(st, hbonds_data, output_folder):
     ''' Process the structure and X3DNA data to create a PDB file with fake WAT molecules'''
@@ -188,32 +238,19 @@ def process_structure(st, hbonds_data, output_folder):
         print("No hydrogen bonds data found.")
         sys.exit()
 
-    # Create a dictionary to hold residue groups
+    # Create a dictionary to hold residue groups and process them
     groups = prepare_groups(st, hb_data)
 
-    for gr_id, gr in groups.items():
-        print(f"Processing group: {gr_id}, number of models: {len(gr['structure'])}")
-        gr['rotran'], gr['rmsd_sup'], gr['rmsd_all'] = superimpose_models(gr['structure'])
-        max_rmsd_all = max(gr['rmsd_all'])
-        max_rmsd_sup = max(gr['rmsd_sup'])
+    for gr in groups.values():
+        print(f"Processing group: {gr.id}, number of models: {len(gr.structure)}")
+        gr.superimpose()
         print(
-            f"Group: {gr_id}, RMSd (all): {max_rmsd_all:.2f}, RMSd (sup): {max_rmsd_sup:.2f}"
+            f"Group: {gr.id}, RMSd (all): {max(gr.rmsd_all):.2f}, RMSd (sup): {max(gr.rmsd_sup):.2f}"
         )
         # transform hbcoords
-        nwat = 1
-        nmod = 0
-        for i, res_data in enumerate(gr['residues']):
-            rot, tran = gr['rotran'][i]
-            for hb in res_data['hbcoords']:
-                transformed_hbcoords = np.dot(hb, rot) + tran
-                gr['transformed_hbcoords'].append(transformed_hbcoords)
-                new_atom = Atom('O', transformed_hbcoords, 1.0, 1.0, ' ', 'O', 0, 'O')
-                new_residue = Residue(('W', nwat, ' '), 'WAT', ' ')
-                new_residue.add(new_atom)
-                gr['structure'][nmod][NEW_CHAIN_ID].add(new_residue)
-                nwat += 1
-            nmod += 1
-        save_group(gr, gr_id, st.id, output_folder)
+        gr.transform_hbcoords()
+        # Save the group structure to a PDB file
+        gr.save(f"{output_folder}/{st.id}_{gr.id}.pdb")
 
 
 def main():
