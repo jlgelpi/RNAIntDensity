@@ -5,6 +5,7 @@ import json
 import argparse
 import re
 import os
+import sys
 import numpy as np
 
 from Bio.PDB.MMCIFParser import MMCIFParser
@@ -104,7 +105,7 @@ def superimpose_models(st):
     return rotran, rmsd, rmsd_all
 
 
-def main(st, hbonds_data, output_folder, grid_output=None):
+def main(st, hbonds_data, output_folder):
     ''' Main function to process the tructure and X3DNA data '''
 
     hb_data = {}
@@ -194,13 +195,18 @@ def main(st, hbonds_data, output_folder, grid_output=None):
         # Save the group structure to a PDB file
         io = PDBIO()
         io.set_structure(gr['structure'])
-        io.save(f"{output_folder}/{gr_id}.pdb")
-        # Save the group structure to grid file if specified
-        if grid_output: 
-            pass  # Placeholder for grid output logic
+        io.save(f"{output_folder}/{structure.id}_{gr_id}.pdb")
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Combine X3DNA analysis on a 3D grid')
+
+    parser.add_argument(
+        '-i','--input_folder', 
+        type=str,
+        help='Input Folder (Default current folder)',
+        default='.'
+    )
     parser.add_argument(
         '-o','--output_folder', 
         type=str,
@@ -210,36 +216,38 @@ if __name__ == '__main__':
         '--grid_output', help='Output grid file (Default: None)',
         type=str, default=None
     )
-    parser.add_argument('cif_file', type=str, help='Input mmCIF file')
-    parser.add_argument('json_file', type=str, help='Input JSON file with X3DNA analysis')
+    parser.add_argument('--pdb_id', type=str, help='Input structure id', required=True)
     args = parser.parse_args()
 
+    cif_file = f"{args.input_folder}/{args.pdb_id}.cif"
+    json_file = f"{args.input_folder}/{args.pdb_id}.json"
+
     # Check if the input files exist
-    if not os.path.isfile(args.cif_file):
-        raise FileNotFoundError(f"Input mmCIF file not found: {args.cif_file}")
-    if not os.path.isfile(args.json_file):
-        raise FileNotFoundError(f"Input JSON file not found: {args.json_file}")
+    if not os.path.isfile(cif_file):
+        sys.exit(f"Input mmCIF file not found: {cif_file}")
+    if not os.path.isfile(json_file):
+        sys.exit(f"Input JSON file not found: {json_file}")
     if args.output_folder is None:
-        args.output_folder = os.path.dirname(args.cif_file)
+        args.output_folder = args.input_folder
     # Ensure the output folder exists
     if not os.path.exists(args.output_folder):
         os.makedirs(args.output_folder)
 
     # Parse the PDB file
     parser = MMCIFParser()
-    structure = parser.get_structure('X3DNA', args.cif_file)
+    structure = parser.get_structure(args.pdb_id, cif_file)
     atom_renumbering(structure)
-    print(f"Parsed structure from {args.cif_file}")
+    print(f"Parsed {args.pdb_id} structure from {cif_file}")
 
     # Load the JSON data
     try:
-        with open(args.json_file, 'r') as f:
+        with open(json_file, 'r') as f:
             x3dna_data = json.load(f)
     except json.JSONDecodeError as e:
         raise ValueError(f"Error decoding JSON file: {e}")
     # Validate the JSON data
     if 'hbonds' not in x3dna_data:
         raise ValueError("JSON file does not contain 'hbonds'")
-    print(f"Loaded X3DNA HB data from {args.json_file}")
+    print(f"Loaded X3DNA HB data from {json_file}")
 
-    main(structure, x3dna_data['hbonds'], args.output_folder, args.grid_output)
+    main(structure, x3dna_data['hbonds'], args.output_folder)
