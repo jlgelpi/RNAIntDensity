@@ -36,6 +36,8 @@ NULL_ROTRAN = [
 
 STD_RESNAMES = ['A', 'C', 'G', 'U', 'DT', 'DA', 'DC', 'DG']
 
+NEW_CHAIN_ID = 'A'  # New chain ID for the output structure
+
 def get_atom_from_index(st, atom_index):
     ''' Get atom from structure by index '''
     for at in st.get_atoms():
@@ -104,10 +106,8 @@ def superimpose_models(st):
         rotran.append(spimp.rotran)
     return rotran, rmsd, rmsd_all
 
-
-def main(st, hbonds_data, output_folder):
-    ''' Main function to process the tructure and X3DNA data '''
-
+def process_hbonds_data(st, hbonds_data):
+    ''' Process the X3DNA hydrogen bonds data '''
     hb_data = {}
     for hb in hbonds_data:
         at1 = get_atom_from_x3dna_id(st, hb['atom1_id'])
@@ -132,9 +132,12 @@ def main(st, hbonds_data, output_folder):
             'coords': at1.coord,
             'details': hb
         })
-    
+    return hb_data
+
+
+def prepare_groups(st, hb_data):
+    ''' Prepare groups of residues to accumulate HB data '''
     groups = {}
-    # Prep residue groups
     nresidues = 0
     for res in st.get_residues():
         if res not in hb_data:
@@ -153,7 +156,7 @@ def main(st, hbonds_data, output_folder):
             }
 
         residue = res.copy()
-        new_chain = Chain('A')
+        new_chain = Chain(NEW_CHAIN_ID)
         new_chain.add(residue)
         new_mod = Model(groups[res.get_resname()]['nmod'])
         new_mod.add(new_chain)
@@ -169,6 +172,24 @@ def main(st, hbonds_data, output_folder):
         nresidues += 1
 
     print(f"Found {len(hb_data)} hydrogen bonds on {nresidues} residues")
+    return groups
+
+def save_group(gr, gr_id, st_id, output_folder):
+    ''' Save the group structure to a PDB file'''
+    io = PDBIO()
+    io.set_structure(gr['structure'])
+    io.save(f"{output_folder}/{st_id}_{gr_id}.pdb")
+
+
+def process_structure(st, hbonds_data, output_folder):
+    ''' Process the structure and X3DNA data to create a PDB file with fake WAT molecules'''
+    hb_data = process_hbonds_data(st, hbonds_data)
+    if not hb_data:
+        print("No hydrogen bonds data found.")
+        sys.exit()
+
+    # Create a dictionary to hold residue groups
+    groups = prepare_groups(st, hb_data)
 
     for gr_id, gr in groups.items():
         print(f"Processing group: {gr_id}, number of models: {len(gr['structure'])}")
@@ -189,17 +210,15 @@ def main(st, hbonds_data, output_folder):
                 new_atom = Atom('O', transformed_hbcoords, 1.0, 1.0, ' ', 'O', 0, 'O')
                 new_residue = Residue(('W', nwat, ' '), 'WAT', ' ')
                 new_residue.add(new_atom)
-                gr['structure'][nmod]['A'].add(new_residue)
+                gr['structure'][nmod][NEW_CHAIN_ID].add(new_residue)
                 nwat += 1
             nmod += 1
-        # Save the group structure to a PDB file
-        io = PDBIO()
-        io.set_structure(gr['structure'])
-        io.save(f"{output_folder}/{structure.id}_{gr_id}.pdb")
+        save_group(gr, gr_id, st.id, output_folder)
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Combine X3DNA analysis on a 3D grid')
+def main():
+    ''' Main function to process the tructure and X3DNA data '''
+    parser = argparse.ArgumentParser(description='Combine X3DNA analysis on a PDB file')
 
     parser.add_argument(
         '-i','--input_folder', 
@@ -227,6 +246,7 @@ if __name__ == '__main__':
         sys.exit(f"Input mmCIF file not found: {cif_file}")
     if not os.path.isfile(json_file):
         sys.exit(f"Input JSON file not found: {json_file}")
+
     if args.output_folder is None:
         args.output_folder = args.input_folder
     # Ensure the output folder exists
@@ -244,10 +264,13 @@ if __name__ == '__main__':
         with open(json_file, 'r') as f:
             x3dna_data = json.load(f)
     except json.JSONDecodeError as e:
-        raise ValueError(f"Error decoding JSON file: {e}")
+        print(f"Error decoding JSON file: {e}")
     # Validate the JSON data
     if 'hbonds' not in x3dna_data:
-        raise ValueError("JSON file does not contain 'hbonds'")
+        print("JSON file does not contain 'hbonds'")
     print(f"Loaded X3DNA HB data from {json_file}")
 
-    main(structure, x3dna_data['hbonds'], args.output_folder)
+    process_structure(structure, x3dna_data['hbonds'], args.output_folder)
+
+if __name__ == '__main__':
+    main()
