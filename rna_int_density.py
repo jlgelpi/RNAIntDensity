@@ -124,13 +124,16 @@ def process_hbonds_data(st, hbonds_data):
     ''' Process the X3DNA hydrogen bonds data '''
     hb_data = {}
     for hb in hbonds_data:
+
         if hb['donAcc_type'] not in HB_QUALITY:
             continue
-
         at1 = get_atom_from_x3dna_id(st, hb['atom1_id'])
         at2 = get_atom_from_x3dna_id(st, hb['atom2_id'])
-
         res1 = at1.get_parent()
+        res2 = at2.get_parent()
+        if res1 == res2:
+            continue
+
         if res1 not in hb_data:
             hb_data[res1] = []
 
@@ -141,7 +144,6 @@ def process_hbonds_data(st, hbonds_data):
             'details': hb
         })
 
-        res2 = at2.get_parent()
         if res2 not in hb_data:
             hb_data[res2] = []
 
@@ -166,6 +168,7 @@ class ResidueGroup():
 
     def add_residue(self, res, hb_data):
         ''' Add a residue to the group '''
+
         residue = res.copy()
         new_chain = Chain(NEW_CHAIN_ID)
         new_chain.add(residue)
@@ -223,6 +226,7 @@ def prepare_groups(st, hb_data):
             groups[res.get_resname()] = ResidueGroup(res.get_resname())
 
         # Add the residue to the group
+
         groups[res.get_resname()].add_residue(res, hb_data[res])
 
         nresidues += 1
@@ -245,9 +249,10 @@ def process_structure(st, hbonds_data, output_folder, verbose=False):
     if verbose:
         for res, hbs in hb_data.items():
             for hb in hbs:
-                if hb['atm2'].serial_number < hb['atm'].serial_number:
-                    continue
-                print(f"#DEBUG HB: {mu.atom_id(hb['atm']):<13} - {mu.atom_id(hb['atm2']):<13} {hb['details']['distance']:.3f}")
+                print(
+                    f"#DEBUG HB: {mu.atom_id(hb['atm']):<13}"
+                    f"- {mu.atom_id(hb['atm2']):<13} {hb['details']['distance']:.3f}"
+                )
     # Create a dictionary to hold residue groups and process them
     groups = prepare_groups(st, hb_data)
 
