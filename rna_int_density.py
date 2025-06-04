@@ -21,7 +21,7 @@ import biobb_structure_checking.modelling.utils as mu
 
 RIBOSE_RING_ATOMS = ['C4\'', 'O4\'', 'C1\'', 'C2\'', 'C3\'']
 
-SUP_ATOMS = RIBOSE_RING_ATOMS
+SUP_ATOMS = RIBOSE_RING_ATOMS + ['N1', 'N9', 'C1', 'C6']
 
 HB_QUALITY_ALL = ['standard', 'acceptable', 'questionable']
 
@@ -35,11 +35,11 @@ NULL_ROTRAN = [
 ]
 
 STD_RESNAMES = [
-    'A', 'C', 'G', 'U', 
-    'DT', 'DA', 'DC', 'DG', 
-    'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 
-    'GLY', 'GLN', 'GLU', 'HIS', 'ILE', 
-    'LEU', 'LYS', 'MET', 'PHE', 'PRO', 
+    'A', 'C', 'G', 'U',
+    'DT', 'DA', 'DC', 'DG',
+    'ALA', 'ARG', 'ASN', 'ASP', 'CYS',
+    'GLY', 'GLN', 'GLU', 'HIS', 'ILE',
+    'LEU', 'LYS', 'MET', 'PHE', 'PRO',
     'SER', 'THR', 'TRP', 'TYR', 'VAL'
 ]
 
@@ -124,6 +124,9 @@ def process_hbonds_data(st, hbonds_data):
     ''' Process the X3DNA hydrogen bonds data '''
     hb_data = {}
     for hb in hbonds_data:
+        if hb['donAcc_type'] not in HB_QUALITY:
+            continue
+
         at1 = get_atom_from_x3dna_id(st, hb['atom1_id'])
         at2 = get_atom_from_x3dna_id(st, hb['atom2_id'])
 
@@ -133,6 +136,7 @@ def process_hbonds_data(st, hbonds_data):
 
         hb_data[res1].append({
             'atm': at1,
+            'atm2': at2,
             'coords': at2.coord,
             'details': hb
         })
@@ -143,6 +147,7 @@ def process_hbonds_data(st, hbonds_data):
 
         hb_data[res2].append({
             'atm': at2,
+            'atm2': at1,
             'coords': at1.coord,
             'details': hb
         })
@@ -189,7 +194,7 @@ class ResidueGroup():
             nwat = 1
             for hb in res_data['hbcoords']:
                 new_atom = Atom(
-                    'O', 
+                    'O',
                     apply_transformation(hb, self.rotran[i]),
                     1.0, 1.0, ' ', 'O', 0, 'O'
                 )
@@ -231,13 +236,18 @@ def apply_transformation(crds, rotran):
     transformed_crds = np.dot(crds, rot) + tran
     return transformed_crds
 
-def process_structure(st, hbonds_data, output_folder):
+def process_structure(st, hbonds_data, output_folder, verbose=False):
     ''' Process the structure and X3DNA data to create a PDB file with fake WAT molecules'''
     hb_data = process_hbonds_data(st, hbonds_data)
     if not hb_data:
         print("No hydrogen bonds data found.")
         sys.exit()
-
+    if verbose:
+        for res, hbs in hb_data.items():
+            for hb in hbs:
+                if hb['atm2'].serial_number < hb['atm'].serial_number:
+                    continue
+                print(f"#DEBUG HB: {mu.atom_id(hb['atm']):<13} - {mu.atom_id(hb['atm2']):<13} {hb['details']['distance']:.3f}")
     # Create a dictionary to hold residue groups and process them
     groups = prepare_groups(st, hb_data)
 
@@ -258,21 +268,23 @@ def main():
     parser = argparse.ArgumentParser(description='Combine X3DNA analysis on a PDB file')
 
     parser.add_argument(
-        '-i','--input_folder', 
+        '-i','--input_folder',
         type=str,
         help='Input Folder (Default current folder)',
         default='.'
     )
     parser.add_argument(
-        '-o','--output_folder', 
+        '-o','--output_folder',
         type=str,
         help='Output Folder (Default input folder)'
     )
-    parser.add_argument(
-        '--grid_output', help='Output grid file (Default: None)',
-        type=str, default=None
-    )
+    parser.add_argument('--no_filter', action='store_true', help='Filter for quality of hydrogen bonds')
     parser.add_argument('--pdb_id', type=str, help='Input structure id', required=True)
+    parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='Extra information during execution'
+    )
     args = parser.parse_args()
 
     cif_file = f"{args.input_folder}/{args.pdb_id}.cif"
@@ -307,7 +319,7 @@ def main():
         print("JSON file does not contain 'hbonds'")
     print(f"Loaded X3DNA HB data from {json_file}")
 
-    process_structure(structure, x3dna_data['hbonds'], args.output_folder)
+    process_structure(structure, x3dna_data['hbonds'], args.output_folder, args.verbose)
 
 if __name__ == '__main__':
     main()
