@@ -39,6 +39,7 @@ def process_hbonds_data(st, hbonds_data):
             continue
         at1 = ut.get_atom_from_x3dna_id(st, hb['atom1_id'])
         at2 = ut.get_atom_from_x3dna_id(st, hb['atom2_id'])
+        print(at1, at2)
         res1 = at1.get_parent()
         res2 = at2.get_parent()
         if res1 == res2:
