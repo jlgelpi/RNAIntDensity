@@ -185,8 +185,8 @@ def process_structure(st, hbonds_data, output_folder, verbose=False):
 
 
 def main():
-    ''' Main function to process the tructure and X3DNA data '''
-    parser = argparse.ArgumentParser(description='Combine X3DNA analysis on a PDB file')
+    ''' Main function to process the structure and X3DNA data '''
+    parser = argparse.ArgumentParser(description='Combine X3DNA analysis on a PDB file adding wat molecules at int sites')
 
     parser.add_argument(
         '-i', '--input_folder',
@@ -199,7 +199,7 @@ def main():
         type=str,
         help='Output Folder (Default input folder)'
     )
-    parser.add_argument('--no_filter', action='store_true', help='Filter for quality of hydrogen bonds')
+    parser.add_argument('--no_filter', action='store_true', help='Filter for quality of hydrogen bonds (to be implemented)')
     parser.add_argument('--pdb_id', type=str, help='Input structure id', required=True)
     parser.add_argument(
         '-v', '--verbose',
